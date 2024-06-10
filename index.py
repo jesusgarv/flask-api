@@ -1,11 +1,12 @@
-from flask import Flask, request
+import os
+from flask import Flask, request, send_from_directory
 import json
 import numpy as np
 from PIL import Image
 import base64
 from flask_cors import CORS
 import cv2
-from flask_mysqldb import MySQL
+# from flask_mysqldb import MySQL
 
 app = Flask(__name__)
 CORS(app)
@@ -22,9 +23,15 @@ app.config['MYSQL_DB'] = 'galeria'
 app.config['MYSQL_DATABASE_PORT']=3306
 
 
-mysql = MySQL(app)
+# mysql = MySQL(app)
 
+# Las rutas publicas para acceder a archivos publicos, despues del /public el usuario puede buscar cualquier direccion
+# Si existe, se le devuelve el archivo solicitado, sirve para acceder a las imagenes.
+@app.route("/public/<path:path>")
+def send_images(path):
+    return send_from_directory('public', path)
 
+# Prueba de que el servidor esta en linea
 @app.route("/", methods=["GET"])
 def index_route():
     return json.dumps({
@@ -32,6 +39,8 @@ def index_route():
         "message" : "Hello world in mundo"
     })
 
+
+## Modificar esta funcion para no usar CV2
 @app.route("/image", methods=["POST"])
 def image_route():
     ## Obtener imagen en base 64 y la pasamos a imagen (como archivo o conjunto de bytes)
@@ -62,6 +71,7 @@ def image_route():
 @app.route("/create_gallery", methods=["PUT"])
 def create_gallery():
     try:
+        # Obtenemos la informacion de la galeria desde el formulario
         galeria = request.form.get("galeria")
         descripcion = request.form.get("descripcion")
         titulos = request.form.get("titulos")
@@ -72,20 +82,36 @@ def create_gallery():
         titulos = json.loads(titulos)
         imagenes = json.loads(imagenes)
         descripciones_extra = json.loads(descripciones_extra)
-        
-        cursor = mysql.connection.cursor()
-        cursor.execute('''INSERT INTO gallery (name_gallery, gallery_description) values (%s, %s)''',(galeria,descripcion))
-        id_galeria = cursor.lastrowid
-        mysql.connection.commit()
-        cursor.close()
 
-        cursor = mysql.connection.cursor()
-        for i, titles in enumerate(titulos):
-            cursor.execute("INSERT INTO images (gallery_idgallery, image_name, image_description, image) VALUES ("+str(id_galeria)+", '"+titles+"', '"+descripciones_extra[i]+"','"+imagenes[i]+"')")
-            mysql.connection.commit()
-            
-        cursor.close()
+        # Declaramos el arreglo donde se almacenaran las imagenes dentro del json
+        imagenes_obj_array = []
 
+        # Recorremos los arreglos y creamos la imagen en la carpeta public/imagenes
+        # Luego anexamos los datos de las imagenes al arreglo
+        # En caso de que la creacion del archivo falle, no se hará el registro
+        for i in range(len(titulos)):
+            imagenes_obj = {}
+            write_image(imagenes[i],titulos[i],i)
+            imagenes_obj["image"] = f"/public/imagenes/{titulos[i]}_{i}.png"
+            imagenes_obj["image_name"] = titulos[i]
+            imagenes_obj["image_description"] = descripciones_extra[i]
+            imagenes_obj_array.append(imagenes_obj)
+
+        # Obtenemos el archivo json
+        data = read_from_json()
+
+        # Anexamos al final del arreglo nuestro mas reciente objeto, su id corresponde al tamaño del arreglo al momento de crearse
+        data['galleries'].append({
+            "idgallery" : len(data['galleries']),
+            "name_gallery" : galeria,
+            "gallery_description" : descripcion,
+            "images" : imagenes_obj_array
+        })
+
+        # Reescribimos el json
+        write_on_json(data)
+
+        # Termina el proceso con mensaje de conclusion exitosa
         return json.dumps({
             "statusCode" : 200,
             "message" : "Galeria creada exitosamente"
@@ -100,100 +126,70 @@ def create_gallery():
 @app.route("/get_galleries", methods=["GET"])
 def get_galleries(): 
     try: 
-        query = "SELECT * FROM gallery" 
-        cursor = mysql.connection.cursor() 
-
-        cursor.execute(query) 
-        results = cursor.fetchall() 
-        cursor.close() 
+        # Leemos el archivo json
+        data = read_from_json()
  
-        galerias = [] 
-         
-        cursor = mysql.connection.cursor() 
- 
-        for row in results: 
-            aux ={} 
-            imagenes = [] 
-            aux["id"] = row[0] 
-            aux["name_gallery"] = row[1] 
-            aux["gallery_description"] = row[2] 
-            cursor.execute("SELECT * FROM images where gallery_idgallery="+str(row[0])) 
-            rows = cursor.fetchall() 
-
-            print(rows)
-
-            for image in rows: 
-                aux2 = {} 
-                aux2["idimage"] = image[0] 
-                aux2["image_name"] = image[2] 
-                aux2["image_description"] = image[3] 
-                aux2["image"] = image[4].decode('utf-8') 
-                imagenes.append(aux2) 
-            aux["images"] = imagenes 
-            galerias.append(aux) 
- 
-        cursor.close() 
- 
+        # Retornamos el valor que se encuentra dentro del arreglo de galerias
         return json.dumps({ 
             "statusCode" : 200, 
             "message" : "Data successfully", 
-            "data" : galerias 
+            "data" : data["galleries"] 
         }) 
     except Exception as e: 
         print(e) 
         return json.dumps({ 
-            "statusCode" : 00, 
+            "statusCode" : 500, 
             "message" : "Error " +  str(e), 
             "data" : []
         })
     
+    
+# Ahora se borra con la posicion del arreglo, no por un id, por lo que el id será dinamico ya que depende de donde se guarde
 @app.route("/delete_gallery", methods=["POST"])
 def delete_gallery():
     idgaleria = request.form.get("idgallery")
-    query = "DELETE FROM gallery where idgallery=" + str(idgaleria)
-    cursor = mysql.connection.cursor()
-    cursor.execute(query)
-    mysql.connection.commit()
-    cursor.close()
+    # convertimos el id a int porque si no la funcion pop no hace lo que debe
+    idgaleria = int(idgaleria)
+    try:
+        # Obtenemos el valor actual del json
+        data = read_from_json()
 
-    query = "SELECT * FROM gallery"
-    cursor = mysql.connection.cursor()
-    cursor.execute(query)
-    results = cursor.fetchall()
-    cursor.close()
+        # Eliminamos el valor en la posicion del id
+        data['galleries'].pop(idgaleria)
 
-    galerias = []
-    
-    cursor = mysql.connection.cursor()
+        # Reescribimos el json ya sin el objeto eliminado
+        write_on_json(data)
 
-    for row in results:
-        aux ={}
-        imagenes = []
-        aux["idgallery"] = row[0]
-        aux["name_gallery"] = row[1]
-        aux["gallery_description"] = row[2]
-        cursor.execute("SELECT * FROM images where gallery_idgallery="+str(row[0]))
-        rows = cursor.fetchall()
-
-        for image in rows:
-            aux2 = {}
-            aux2["idimage"] = image[0]
-            aux2["image_name"] = image[2]
-            aux2["image_description"] = image[3]
-            aux2["image"] = image[4].decode('utf-8')
-            imagenes.append(aux2)
-        aux["images"] = imagenes
-        galerias.append(aux)
-
-    cursor.close()
-
-    return json.dumps({
-        "statusCode" : 200,
-        "message" : "Data successfully",
-        "data" : galerias
-    })
+        return json.dumps({
+            "statusCode" : 200,
+            "message" : "Data successfully",
+            "data" : data['galleries']
+        })
+    except Exception as e:
+        print(e)
+        return json.dumps({ 
+            "statusCode" : 500, 
+            "message" : "Error " +  str(e), 
+            "data" : []
+        })
 
 
+# Funcion para obtener la data del json
+def read_from_json():
+    SITE_ROOT = os.path.realpath(os.path.dirname(__file__))
+    json_url = os.path.join(SITE_ROOT, "galleries.json")
+    data = json.load(open(json_url))
+    return data
+
+def write_on_json(data):
+    with open("galleries.json", "w") as f:
+        json.dump(data, f)
+
+def write_image(base_64_string, nombre, index):
+    with open(f"public/imagenes/{nombre.strip()}_{index}.png", "wb") as fh:
+        fh.write(base64.decodebytes(base_64_string.split(",")[1].encode()))
+
+# reescribir para funcionar con el nuevo modelo de lectura de imagenes
 def readb64(base64_string):
     decoded_data = base64.b64decode(base64_string)
     np_data = np.fromstring(decoded_data,np.uint8)

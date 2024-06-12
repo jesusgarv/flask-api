@@ -16,11 +16,11 @@ CORS(app)
 #app.config['MYSQL_PASSWORD'] = 'ErHFvr3MYT52tM5E5wF4' 
 #app.config['MYSQL_DB'] = 'galeria'
 
-app.config['MYSQL_HOST'] = 'localhost' 
-app.config['MYSQL_USER'] = 'root'
-app.config['MYSQL_PASSWORD'] = 'root2'
-app.config['MYSQL_DB'] = 'galeria'
-app.config['MYSQL_DATABASE_PORT']=3306
+#app.config['MYSQL_HOST'] = 'localhost' 
+#app.config['MYSQL_USER'] = 'root'
+#app.config['MYSQL_PASSWORD'] = 'root2'
+#app.config['MYSQL_DB'] = 'galeria'
+#app.config['MYSQL_DATABASE_PORT']=3306
 
 
 # mysql = MySQL(app)
@@ -153,9 +153,17 @@ def delete_gallery():
     try:
         # Obtenemos el valor actual del json
         data = read_from_json()
+        
+        # Se agrega este recorrido por si el id no corresponde a la posicion en el arreglo
+        index = -1
+
+        for i in range(len(data['galleries'])):
+            if data['galleries'][i]['idgallery'] == idgaleria:
+                index = i
+                break
 
         # Eliminamos el valor en la posicion del id
-        data['galleries'].pop(idgaleria)
+        data['galleries'].pop(index)
 
         # Reescribimos el json ya sin el objeto eliminado
         write_on_json(data)
@@ -182,6 +190,10 @@ def read_from_json():
     return data
 
 def write_on_json(data):
+    # Se agrega este recorrido para poder re etiquetar los id de las galerias segun su orden en el arreglo
+    for i in range(len(data['galleries'])):
+        data['galleries'][i]['idgallery'] = i
+
     with open("galleries.json", "w") as f:
         json.dump(data, f)
 
